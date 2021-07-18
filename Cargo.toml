@@ -3,8 +3,8 @@ name = "libc_tools"
 version = "0.1.0"
 authors = ["lovebaihezi <x18739168862@gmail.com>"]
 edition = "2018"
-
+license = "MIT OR Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
+description = "a fork to std process"
 [dependencies]
 libc="0.2.98"
