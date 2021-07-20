@@ -1,7 +1,19 @@
 {
     "cSpell.words": [
+        "EINTR",
+        "FILENO",
         "Popen",
         "WNOHANG",
-        "fclose"
+        "errno",
+        "execl",
+        "fclose",
+        "fdopen",
+        "fgets",
+        "fputs",
+        "getpid",
+        "getppid",
+        "perror",
+        "strcmp",
+        "strlen"
     ]
 }

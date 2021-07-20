@@ -1,115 +1,152 @@
-use crate::fork::{Fork, ForkPid};
+use std::fmt::Display;
 
-const FILE_NULL: *mut libc::FILE = std::ptr::null_mut::<libc::FILE>();
+use crate::close::Close;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Pipe {
-    write_end: libc::pid_t,
-    read_end: libc::pid_t,
+    pub for_read: libc::c_int,
+    pub for_write: libc::c_int,
 }
 
 impl Pipe {
-    fn pipe() -> Option<Pipe> {
+    pub fn new(&fds: &[libc::c_int; 2]) -> Pipe {
+        Pipe {
+            for_read: fds[0],
+            for_write: fds[1],
+        }
+    }
+    pub fn pipe() -> Option<Pipe> {
         let mut end = [0; 2];
         match unsafe { libc::pipe(end.as_mut_ptr()) } {
             libc::INT_MIN..=-1 => None,
-            _ => Some(Pipe {
-                write_end: end[1],
-                read_end: end[0],
-            }),
+            _ => Some(Pipe::new(&end)),
         }
     }
 
-    fn pipe2(flag: i32) -> Option<Pipe> {
+    pub fn pipe2(flag: i32) -> Option<Pipe> {
         let mut end = [0; 2];
         match unsafe { libc::pipe2(end.as_mut_ptr(), flag) } {
-            std::i32::MIN..=-1 => None,
-            _ => Some(Pipe {
-                write_end: end[1],
-                read_end: end[0],
-            }),
+            libc::INT_MIN..=-1 => None,
+            _ => Some(Pipe::new(&end)),
+        }
+    }
+
+    pub fn close_read(&mut self) -> Result<(), Close> {
+        if self.for_read != -1 {
+            Close::close(self.for_read)?;
+            self.for_read = -1;
+            Ok(())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn close_write(&mut self) -> Result<(), Close> {
+        if self.for_write != -1 {
+            Close::close(self.for_write)?;
+            self.for_write = -1;
+            Ok(())
+        } else {
+            Ok(())
         }
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct Popen {
-    arg: String,
-    pid: Option<libc::pid_t>,
-    stdin: *mut libc::FILE,
-    stdout: *mut libc::FILE,
-    stderr: *mut libc::FILE,
+impl Display for Pipe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            std::format!(
+                "pipe: | for_read(fd[0]) {} <<= for_write(fd[1]) {} |",
+                self.for_read,
+                self.for_write,
+            )
+            .as_str(),
+        )
+    }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum PopenError {
-    PipeCreateFailed,
-    ExecArgFailed,
-    ForkFailed,
-}
-
-impl PopenError {
-    fn as_str(&self) -> &'static str {
-        match *self {
-            Self::PipeCreateFailed => "create pipe failed!",
-            Self::ExecArgFailed => "exec arg failed!",
-            Self::ForkFailed => "fork failed!",
+impl Default for Pipe {
+    fn default() -> Self {
+        Pipe {
+            for_read: -1,
+            for_write: -1,
         }
     }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct RedirectPipe {
-    stdout: Pipe,
-    stdin: Pipe,
-    stderr: Pipe,
-}
-
-impl RedirectPipe {
-    pub fn new() -> Option<RedirectPipe> {
-        Some(RedirectPipe {
-            stdout: Pipe::pipe()?,
-            stdin: Pipe::pipe()?,
-            stderr: Pipe::pipe()?,
-        })
-    }
-}
-
-impl Popen {
-    pub fn new(arg: &str) -> Result<Popen, PopenError> {
-        let RedirectPipe {
-            stdout,
-            stdin,
-            stderr,
-        } = RedirectPipe::new().ok_or(PopenError::PipeCreateFailed)?;
-        let mut popen = Popen {
-            arg: String::from(arg),
-            pid: None,
-            stdin: FILE_NULL,
-            stdout: FILE_NULL,
-            stderr: FILE_NULL,
-        };
-        match Fork::fork() {
-            Some(ForkPid::Parent(_)) => Ok(popen),
-            Some(ForkPid::Children(pid)) => {
-                popen.pid = Some(pid);
-                Err(PopenError::ExecArgFailed)
-            }
-            None => Err(PopenError::ForkFailed),
-        }
-    }
-}
-
-impl Drop for Popen {
+impl Drop for Pipe {
     fn drop(&mut self) {
-        self.pid = None;
-        unsafe {
-            libc::fclose(self.stdin);
-            libc::fclose(self.stdout);
-            libc::fclose(self.stderr);
-        }
+        self.close_read().unwrap();
+        self.close_read().unwrap();
     }
 }
 
-#[cfg(tests)]
-mod tests {}
+#[cfg(test)]
+mod test {
+    use crate::{
+        fork::{Fork, ForkPid},
+        pipe::Pipe,
+        wait::Wait,
+    };
+    #[test]
+    fn test_pipe1() {
+        let mut pipe = Pipe::pipe().unwrap();
+        match Fork::fork() {
+            ForkPid::Parent(_) => {
+                pipe.close_write().unwrap();
+                Wait::children().unwrap();
+                let mut buf = [0 as i8; 4096];
+                while unsafe {
+                    libc::read(pipe.for_read, buf.as_mut_ptr() as *mut libc::c_void, 4096) > 0
+                } {
+                    unsafe {
+                        assert!(libc::strlen(buf.as_ptr()) != 0);
+                    }
+                }
+            }
+            ForkPid::Children(_) => {
+                pipe.close_read().unwrap();
+                let str = "test pipe\0";
+                unsafe {
+                    libc::write(
+                        pipe.for_write,
+                        str.as_ptr() as *const libc::c_void,
+                        str.len(),
+                    )
+                };
+            }
+            ForkPid::None => panic!(""),
+        }
+    }
+
+    #[test]
+    fn test_pipe2() {
+        let mut io_in = Pipe::pipe().unwrap();
+        let mut io_out = Pipe::pipe().unwrap();
+        match Fork::fork() {
+            ForkPid::Parent(_) => {
+                io_in.close_write().unwrap();
+                let mut buf = [0 as i8; 4096];
+                while unsafe {
+                    libc::read(io_out.for_read, buf.as_mut_ptr() as *mut libc::c_void, 4096) > 0
+                } {
+                    unsafe {
+                        assert!(libc::strlen(buf.as_ptr()) != 0);
+                    }
+                }
+            }
+            ForkPid::Children(_) => {
+                io_out.close_read().unwrap();
+                let str = "test pipe\0";
+                unsafe {
+                    libc::write(
+                        io_out.for_write,
+                        str.as_ptr() as *const libc::c_void,
+                        str.len(),
+                    )
+                };
+            }
+            ForkPid::None => panic!(""),
+        }
+    }
+}
