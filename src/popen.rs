@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::{
     dup::{Dup, DupError},
     fork::{Fork, ForkPid},
@@ -7,10 +9,9 @@ use crate::{
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Popen {
-    pub arg: String,
-    pub io: Option<[libc::c_int; 3]>,
-    pub pid: Option<libc::c_int>,
-    fds: Option<[Pipe; 3]>,
+    arg: String,
+    pid: Option<libc::c_int>,
+    fds: Option<[libc::c_int; 3]>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -21,6 +22,7 @@ pub enum PopenError {
     PipeRedirectFailed(libc::c_int),
     Dup2Errno(DupError),
     FdOpenErrno(libc::c_int),
+    SocketPairError(libc::c_int),
 }
 
 impl PopenError {
@@ -36,78 +38,24 @@ impl PopenError {
             Self::FdOpenErrno(v) => {
                 std::format!("open file descriptor as file* stream failed! errno: {}", v)
             }
+            Self::SocketPairError(v) => {
+                std::format!("create socket pair failed! errno: {}", v)
+            }
         }
     }
 }
-#[deprecated(note = "do not use!")]
+
 impl Popen {
-    fn arg(arg: &str) -> Box<Popen> {
+    fn create(arg: &str) -> Box<Popen> {
         Box::new(Popen {
-            arg: String::from(arg),
-            io: None,
+            arg: std::format!("{}\0", arg),
             pid: None,
             fds: None,
         })
     }
-
-    fn run(mut self: Box<Popen>) -> Result<Box<Popen>, PopenError> {
-        let fds = Some(
-            match [Pipe::pipe(), Pipe::pipe(), Pipe::pipe()] {
-                [Some(v1), Some(v2), Some(v3)] => Some([v1, v2, v3]),
-                _ => None,
-            }
-            .ok_or(PopenError::PipeCreateFailed)?,
-        );
-        match Fork::fork() {
-            ForkPid::Parent((_, children)) => {
-                self.pid = Some(children);
-                match &fds {
-                    Some([io_in, io_out, io_err]) => {
-                        self.io = Some([io_in.for_write, io_out.for_read, io_err.for_read]);
-                        self.fds = fds;
-                        Ok(self)
-                    }
-                    None => Err(PopenError::PipeCreateFailed),
-                }
-            }
-            ForkPid::Children(_) => match &fds {
-                Some([v1, v2, v3]) => {
-                    unsafe {
-                        libc::close(v1.for_write);
-                        libc::close(v2.for_read);
-                        libc::close(v3.for_read);
-                    }
-                    let dup = (
-                        Dup::dup2(v1.for_read, libc::STDIN_FILENO),
-                        Dup::dup2(v2.for_write, libc::STDOUT_FILENO),
-                        Dup::dup2(v3.for_write, libc::STDERR_FILENO),
-                    );
-                    match dup {
-                        (Err(v), _, _) | (_, Err(v), _) | (_, _, Err(v)) => {
-                            Err(PopenError::Dup2Errno(v))
-                        }
-                        _ => {
-                            // unsafe {
-                            //     libc::close(v1.for_read);
-                            //     libc::close(v2.for_write);
-                            //     libc::close(v3.for_write);
-                            // };
-                            Err(PopenError::ExecArgFailed(unsafe {
-                                libc::execl(
-                                    "/bin/sh\0".as_ptr() as *const libc::c_char,
-                                    "-c\0".as_ptr() as *const libc::c_char,
-                                    self.arg.as_ptr() as *const libc::c_char,
-                                    std::ptr::null::<libc::c_char>(),
-                                )
-                            }))
-                            // panic!("exec arg failed!");
-                        }
-                    }
-                }
-                None => Err(PopenError::PipeCreateFailed),
-            },
-            ForkPid::None => Err(PopenError::ForkFailed),
-        }
+    // fn run(self: Box<Popen>) -> Result<Box<Popen>, PopenError> {}
+    fn fds(self: Box<Popen>) -> Rc<Box<Popen>> {
+        Rc::new(self)
     }
 }
 
@@ -132,27 +80,8 @@ mod test {
     use super::Popen;
 
     #[test]
-    fn popen_echo() {
-        unsafe {
-            let echo = Popen::arg("ls").run().unwrap();
-            let buf = [0 as i8; 4096];
-            match &echo.io {
-                Some([v1, v2, v3]) => {
-                    let buf = [0 as i8; 4096];
-                    let mut read_size = 0;
-                    while {
-                        read_size = libc::read(*v2, buf.as_ptr() as *mut libc::c_void, 4096);
-                        eprintln!("{}", read_size);
-                        read_size >= 0
-                    } {
-                        eprintln!("{}", read_size);
-                        libc::perror(buf.as_ptr());
-                        assert!(libc::strlen(buf.as_ptr()) != 0);
-                    }
-                }
-                None => panic!("popen create failed!"),
-            }
-        }
+    fn testing() {
+        let p = Popen::arg("echo");
     }
 
     #[test]

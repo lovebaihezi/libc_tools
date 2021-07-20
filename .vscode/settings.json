@@ -13,6 +13,7 @@
         "getpid",
         "getppid",
         "perror",
+        "socketpair",
         "strcmp",
         "strlen"
     ]
