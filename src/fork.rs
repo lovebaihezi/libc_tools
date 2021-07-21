@@ -18,3 +18,15 @@ impl Fork {
         }
     }
 }
+
+#[cfg(test)]
+mod fork {
+    use crate::{
+        fork::{Fork, ForkPid},
+        wait::Wait,
+    };
+    use std::cell::RefCell;
+
+    #[test]
+    fn fork_box() {}
+}

@@ -31,7 +31,7 @@ impl Pipe {
         }
     }
 
-    pub fn close_read(&mut self) -> Result<(), Close> {
+    fn close_read(&mut self) -> Result<(), Close> {
         if self.for_read != -1 {
             Close::close(self.for_read)?;
             self.for_read = -1;
@@ -41,7 +41,7 @@ impl Pipe {
         }
     }
 
-    pub fn close_write(&mut self) -> Result<(), Close> {
+    fn close_write(&mut self) -> Result<(), Close> {
         if self.for_write != -1 {
             Close::close(self.for_write)?;
             self.for_write = -1;
@@ -76,8 +76,15 @@ impl Default for Pipe {
 
 impl Drop for Pipe {
     fn drop(&mut self) {
-        self.close_read().unwrap();
-        self.close_read().unwrap();
+        eprintln!("{}", self);
+        match self.close_read() {
+            Ok(_) => {}
+            Err(e) => eprintln!("{}", e),
+        };
+        match self.close_write() {
+            Ok(_) => {}
+            Err(e) => eprintln!("{}", e),
+        };
     }
 }
 
