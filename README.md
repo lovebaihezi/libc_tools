@@ -11,7 +11,7 @@ it provides three c FILE pointer(stream)
 **how to use**
 ```rust
 unsafe {
-    let popen = Popen::arg("rustc src/run.rs && ./run").exec().unwrap();
+    let popen = Popen::arg("date").exec().unwrap();
     let mut buf = [0 as u8; 4096];
     let mut p;
     while {
