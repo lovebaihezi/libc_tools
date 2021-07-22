@@ -229,7 +229,7 @@ mod popen {
     #[test]
     fn test_out_err() {
         unsafe {
-            let popen = Popen::arg("rustc src/run.rs && ./run").exec().unwrap();
+            let popen = Popen::arg("time").exec().unwrap();
             let mut buf = [0 as u8; 4096];
             let mut p;
             while {
