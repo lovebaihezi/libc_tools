@@ -1,15 +1,25 @@
-pub mod dup;
-pub mod fork;
-pub mod pipe;
-pub mod popen;
-pub mod wait;
-pub mod close;
-pub mod proc;
+mod close;
+mod dup;
+mod exec;
+mod fork;
+mod pipe;
+mod popen;
+mod proc;
 mod run;
-pub mod socket_pair;
-#[cfg(test)]
-mod test {
+mod socket_pair;
+mod wait;
 
-    #[test]
-    fn create_fork() {}
-}
+pub use close::*;
+
+pub use close::*;
+pub use dup::*;
+pub use exec::*;
+pub use fork::*;
+pub use pipe::*;
+pub use popen::*;
+pub use proc::*;
+pub use socket_pair::*;
+pub use wait::*;
+
+#[cfg(test)]
+mod lib {}

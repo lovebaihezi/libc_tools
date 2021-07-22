@@ -1,18 +1,22 @@
+use crate::Close;
+use libc::c_int;
 use std::fmt::Display;
 
-use crate::close::Close;
+pub enum PipeSide {
+    Read,
+    Write,
+}
 
+// the other side of the pipe need to closed when you need to use one side, or one process will be suspend
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Pipe {
-    pub for_read: libc::c_int,
-    pub for_write: libc::c_int,
+    fd: (c_int, c_int),
 }
 
 impl Pipe {
     pub fn new(&fds: &[libc::c_int; 2]) -> Pipe {
         Pipe {
-            for_read: fds[0],
-            for_write: fds[1],
+            fd: (fds[0], fds[1]),
         }
     }
     pub fn pipe() -> Option<Pipe> {
@@ -31,23 +35,19 @@ impl Pipe {
         }
     }
 
-    fn close_read(&mut self) -> Result<(), Close> {
-        if self.for_read != -1 {
-            Close::close(self.for_read)?;
-            self.for_read = -1;
-            Ok(())
-        } else {
-            Ok(())
+    pub fn get(&self, side: PipeSide) -> c_int {
+        match side {
+            PipeSide::Read => self.fd.1,
+            PipeSide::Write => self.fd.0,
         }
     }
+}
 
-    fn close_write(&mut self) -> Result<(), Close> {
-        if self.for_write != -1 {
-            Close::close(self.for_write)?;
-            self.for_write = -1;
-            Ok(())
-        } else {
-            Ok(())
+impl Drop for Pipe {
+    fn drop(&mut self) {
+        match Close::close(&[self.fd.0, self.fd.1]) {
+            Ok(_) => (),
+            Err(v) => eprintln!("{}", v),
         }
     }
 }
@@ -57,103 +57,69 @@ impl Display for Pipe {
         f.write_str(
             std::format!(
                 "pipe: | for_read(fd[0]) {} <<= for_write(fd[1]) {} |",
-                self.for_read,
-                self.for_write,
+                self.fd.0,
+                self.fd.1,
             )
             .as_str(),
         )
     }
 }
-
-impl Default for Pipe {
-    fn default() -> Self {
-        Pipe {
-            for_read: -1,
-            for_write: -1,
+#[macro_export]
+macro_rules! create_pipe {
+    ($n: expr) => {{
+        if $n <= 0 {
+            None
+        } else {
+            let mut pipes: [[libc::c_int; 2]; $n] = [[0; 2]; $n];
+            let mut success = true;
+            for i in 0..$n as usize {
+                unsafe {
+                    match libc::pipe(pipes[i].as_mut_ptr()) {
+                        0 => {}
+                        _ => {
+                            success = false;
+                            break;
+                        }
+                    }
+                };
+            }
+            if success {
+                Some(pipes)
+            } else {
+                None
+            }
         }
-    }
+    }};
 }
 
-impl Drop for Pipe {
-    fn drop(&mut self) {
-        eprintln!("{}", self);
-        match self.close_read() {
-            Ok(_) => {}
-            Err(e) => eprintln!("{}", e),
-        };
-        match self.close_write() {
-            Ok(_) => {}
-            Err(e) => eprintln!("{}", e),
-        };
-    }
-}
 
 #[cfg(test)]
-mod test {
-    use crate::{
-        fork::{Fork, ForkPid},
-        pipe::Pipe,
-        wait::Wait,
-    };
+mod pipe {
+    use std::{error::Error, ffi::CString};
+
+    use libc::execl;
+
+    use crate::Close;
+
     #[test]
-    fn test_pipe1() {
-        let mut pipe = Pipe::pipe().unwrap();
-        match Fork::fork() {
-            ForkPid::Parent(_) => {
-                pipe.close_write().unwrap();
-                Wait::children().unwrap();
-                let mut buf = [0 as i8; 4096];
-                while unsafe {
-                    libc::read(pipe.for_read, buf.as_mut_ptr() as *mut libc::c_void, 4096) > 0
-                } {
-                    unsafe {
-                        assert!(libc::strlen(buf.as_ptr()) != 0);
-                    }
-                }
-            }
-            ForkPid::Children(_) => {
-                pipe.close_read().unwrap();
-                let str = "test pipe\0";
-                unsafe {
-                    libc::write(
-                        pipe.for_write,
-                        str.as_ptr() as *const libc::c_void,
-                        str.len(),
-                    )
-                };
-            }
-            ForkPid::None => panic!(""),
-        }
+    fn test_execl() -> Result<(), Box<dyn Error>> {
+        let path = CString::new("/bin/sh")?;
+        let sh = CString::new("sh")?;
+        let exec = CString::new("-c")?;
+        let arg = CString::new("ls")?;
+        // unsafe { execl(path.as_ptr(), sh.as_ptr(), exec.as_ptr(), arg.as_ptr(), 0) };
+        Ok(())
     }
 
     #[test]
-    fn test_pipe2() {
-        let mut io_in = Pipe::pipe().unwrap();
-        let mut io_out = Pipe::pipe().unwrap();
-        match Fork::fork() {
-            ForkPid::Parent(_) => {
-                io_in.close_write().unwrap();
-                let mut buf = [0 as i8; 4096];
-                while unsafe {
-                    libc::read(io_out.for_read, buf.as_mut_ptr() as *mut libc::c_void, 4096) > 0
-                } {
-                    unsafe {
-                        assert!(libc::strlen(buf.as_ptr()) != 0);
-                    }
-                }
-            }
-            ForkPid::Children(_) => {
-                io_out.close_read().unwrap();
-                let str = "test pipe\0";
-                unsafe {
-                    libc::write(
-                        io_out.for_write,
-                        str.as_ptr() as *const libc::c_void,
-                        str.len(),
-                    )
-                };
-            }
-            ForkPid::None => panic!(""),
-        }
+    fn test_create_pipe_macro() {
+        let pipes1 = create_pipe!(1 + 1).unwrap();
+        let pipes2 = create_pipe!(1 & 1).unwrap();
+        assert!(pipes1.len() == 2);
+        assert!(pipes2.len() == 1);
+        let s = &pipes1.iter().flatten().map(|x| *x).collect::<Vec<i32>>()[..];
+        Close::close(s).unwrap();
+        let s1 = &pipes2.iter().flatten().map(|x| *x).collect::<Vec<i32>>()[..];
+        Close::close(s1).unwrap();
     }
 }
