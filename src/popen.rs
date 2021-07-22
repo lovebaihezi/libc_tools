@@ -1,31 +1,37 @@
-use crate::{
-    dup::{Dup, DupError},
-    fork::{Fork, ForkPid},
-    pipe::Pipe,
-    wait::Wait,
+use libc::{
+    __errno_location, _exit, c_int, c_void, execl, fclose, fdopen, pipe, pipe2, read, socketpair,
+    AF_UNIX, FILE, O_NONBLOCK, SOCK_STREAM, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO,
 };
+use std::ffi::{CString, NulError};
+
+use crate::{create_pipe, dup::DupError, wait::Wait, Close, Dup, Fork, ForkPid, SocketPairError};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Popen {
     pub arg: String,
-    pub io: Option<[libc::c_int; 3]>,
-    pub pid: Option<libc::c_int>,
-    fds: Option<[Pipe; 3]>,
+    pub stdin: *mut FILE,
+    pub stdout: *mut FILE,
+    pub stderr: *mut FILE,
+    pub pid: Option<c_int>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PopenError {
     PipeCreateFailed,
-    ExecArgFailed(libc::c_int),
+    ExecArgFailed(c_int),
     ForkFailed,
-    PipeRedirectFailed(libc::c_int),
+    PipeRedirectFailed(c_int),
     Dup2Errno(DupError),
-    FdOpenErrno(libc::c_int),
+    FdOpenErrno(c_int),
+    CloseError(Close),
+    SocketPairError(SocketPairError),
+    CreateRedirectError(c_int),
+    CStringParesError(NulError),
 }
 
 impl PopenError {
     fn to_string(&self) -> String {
-        match *self {
+        match self {
             Self::PipeCreateFailed => "create pipe failed!".to_string(),
             Self::ExecArgFailed(code) => std::format!("exec arg failed! exit code: {}", code),
             Self::ForkFailed => "fork failed!".to_string(),
@@ -36,76 +42,109 @@ impl PopenError {
             Self::FdOpenErrno(v) => {
                 std::format!("open file descriptor as file* stream failed! errno: {}", v)
             }
+            Self::CloseError(v) => {
+                std::format!("{}", v)
+            }
+            Self::SocketPairError(v) => {
+                std::format!("socket pair {}", v)
+            }
+            Self::CreateRedirectError(v) => {
+                std::format!(
+                    "create socket pair and stderr pipe both failed! errno: {}",
+                    v
+                )
+            }
+            Self::CStringParesError(n) => {
+                std::format!("parse {:<.20} failed!", n.to_string())
+            }
         }
     }
 }
-#[deprecated(note = "do not use!")]
+
+// unsafe fn create_pipe() -> Result<[[libc::c_int; 2]; 3], PopenError> {
+//     let mut pipes = [[-1; 2]; 3];
+//     match (
+//         pipe(pipes[0].as_mut_ptr()),
+//         pipe(pipes[1].as_mut_ptr()),
+//         pipe(pipes[2].as_mut_ptr()),
+//     ) {
+//         (-1, _, _) | (_, -1, _) | (_, _, -1) => Err(PopenError::PipeCreateFailed),
+//         _ => Ok(pipes),
+//     }
+// }
+
+fn socket_pipe() -> Result<[[c_int; 2]; 2], PopenError> {
+    let mut sv = [0 as c_int; 2];
+    let mut fd = [0 as c_int; 2];
+    match unsafe {
+        (
+            socketpair(AF_UNIX, SOCK_STREAM, 0, sv.as_mut_ptr()),
+            pipe2(fd.as_mut_ptr(), O_NONBLOCK),
+        )
+    } {
+        (-1, 0) => Err(PopenError::SocketPairError(SocketPairError::SocketErrno(
+            unsafe { *__errno_location() },
+        ))),
+        (0, -1) => Err(PopenError::PipeCreateFailed),
+        (-1, -1) => Err(PopenError::CreateRedirectError(unsafe {
+            *__errno_location()
+        })),
+        (0, 0) => Ok([sv, fd]),
+        _ => panic!("this should reached!"),
+    }
+}
+
+// #[deprecated(note = "do not use!")]
 impl Popen {
-    fn arg(arg: &str) -> Box<Popen> {
+    pub fn arg(arg: &str) -> Box<Popen> {
         Box::new(Popen {
             arg: String::from(arg),
-            io: None,
+            stdin: 0 as *mut FILE,
+            stdout: 0 as *mut FILE,
+            stderr: 0 as *mut FILE,
             pid: None,
-            fds: None,
         })
     }
-
-    fn run(mut self: Box<Popen>) -> Result<Box<Popen>, PopenError> {
-        let fds = Some(
-            match [Pipe::pipe(), Pipe::pipe(), Pipe::pipe()] {
-                [Some(v1), Some(v2), Some(v3)] => Some([v1, v2, v3]),
-                _ => None,
-            }
-            .ok_or(PopenError::PipeCreateFailed)?,
-        );
+    pub fn exec(mut self: Box<Popen>) -> Result<Box<Popen>, PopenError> {
+        // let [sv, fd] = socket_pipe()?;
+        let [stdout, stdin, stderr] = create_pipe!(3).ok_or(PopenError::PipeCreateFailed)?;
         match Fork::fork() {
             ForkPid::Parent((_, children)) => {
                 self.pid = Some(children);
-                match &fds {
-                    Some([io_in, io_out, io_err]) => {
-                        self.io = Some([io_in.for_write, io_out.for_read, io_err.for_read]);
-                        self.fds = fds;
-                        Ok(self)
-                    }
-                    None => Err(PopenError::PipeCreateFailed),
-                }
+                Close::close(&[stdin[0], stdout[1], stderr[1]])
+                    .or_else(|x| Err(PopenError::CloseError(x)))?;
+                let r = CString::new("r").or_else(|x| Err(PopenError::CStringParesError(x)))?;
+                let w = CString::new("w").or_else(|x| Err(PopenError::CStringParesError(x)))?;
+                self.stdin = unsafe { fdopen(stdin[1], w.as_ptr()) };
+                self.stdout = unsafe { fdopen(stdout[0], r.as_ptr()) };
+                self.stderr = unsafe { fdopen(stderr[0], r.as_ptr()) };
+                Ok(self)
             }
-            ForkPid::Children(_) => match &fds {
-                Some([v1, v2, v3]) => {
-                    unsafe {
-                        libc::close(v1.for_write);
-                        libc::close(v2.for_read);
-                        libc::close(v3.for_read);
-                    }
-                    let dup = (
-                        Dup::dup2(v1.for_read, libc::STDIN_FILENO),
-                        Dup::dup2(v2.for_write, libc::STDOUT_FILENO),
-                        Dup::dup2(v3.for_write, libc::STDERR_FILENO),
-                    );
-                    match dup {
-                        (Err(v), _, _) | (_, Err(v), _) | (_, _, Err(v)) => {
-                            Err(PopenError::Dup2Errno(v))
-                        }
-                        _ => {
-                            // unsafe {
-                            //     libc::close(v1.for_read);
-                            //     libc::close(v2.for_write);
-                            //     libc::close(v3.for_write);
-                            // };
-                            Err(PopenError::ExecArgFailed(unsafe {
-                                libc::execl(
-                                    "/bin/sh\0".as_ptr() as *const libc::c_char,
-                                    "-c\0".as_ptr() as *const libc::c_char,
-                                    self.arg.as_ptr() as *const libc::c_char,
-                                    std::ptr::null::<libc::c_char>(),
-                                )
-                            }))
-                            // panic!("exec arg failed!");
-                        }
-                    }
-                }
-                None => Err(PopenError::PipeCreateFailed),
-            },
+            // socket provide
+            ForkPid::Children(_) => {
+                Dup::dup2s(
+                    &[stdout[1], stderr[1], STDIN_FILENO],
+                    &[STDOUT_FILENO, STDERR_FILENO, stdin[0]],
+                )
+                .unwrap();
+                Close::close(&[
+                    stdout[0], stdout[1], stdin[0], stdin[1], stderr[0], stderr[1],
+                ])
+                .unwrap();
+                let path = CString::new("/bin/sh").unwrap();
+                let sh = CString::new("sh").unwrap();
+                let exec = CString::new("-c").unwrap();
+                let arg = CString::new(self.arg.clone()).unwrap();
+                unsafe {
+                    _exit(execl(
+                        path.as_ptr(),
+                        sh.as_ptr(),
+                        exec.as_ptr(),
+                        arg.as_ptr(),
+                        0,
+                    ))
+                };
+            }
             ForkPid::None => Err(PopenError::ForkFailed),
         }
     }
@@ -113,6 +152,12 @@ impl Popen {
 
 impl Drop for Popen {
     fn drop(&mut self) {
+        let null = std::ptr::null_mut::<FILE>();
+        for i in &[self.stdin, self.stdout, self.stderr][..] {
+            if *i != null {
+                unsafe { fclose(*i) };
+            }
+        }
         if let Some(pid) = self.pid {
             // eprintln!("pid: {}", pid);
             while {
@@ -128,34 +173,16 @@ impl Drop for Popen {
 }
 
 #[cfg(test)]
-mod test {
-    use super::Popen;
+mod popen {
+    use libc::{
+        __errno_location, fclose, fgets, perror, socketpair, strlen, FILE, PF_UNIX, SOCK_CLOEXEC,
+        SOCK_DGRAM,
+    };
+
+    use crate::{popen::popen, Close, Popen, Wait};
 
     #[test]
-    fn popen_echo() {
-        unsafe {
-            let echo = Popen::arg("ls").run().unwrap();
-            let buf = [0 as i8; 4096];
-            match &echo.io {
-                Some([v1, v2, v3]) => {
-                    let buf = [0 as i8; 4096];
-                    let mut read_size = 0;
-                    while {
-                        read_size = libc::read(*v2, buf.as_ptr() as *mut libc::c_void, 4096);
-                        eprintln!("{}", read_size);
-                        read_size >= 0
-                    } {
-                        eprintln!("{}", read_size);
-                        libc::perror(buf.as_ptr());
-                        assert!(libc::strlen(buf.as_ptr()) != 0);
-                    }
-                }
-                None => panic!("popen create failed!"),
-            }
-        }
-    }
-
-    #[test]
+    // #[ignore = "absolutely correct"]
     fn test_libc_popen() {
         unsafe {
             // the common libc only support the 'r' and 'w', but the apple Libc support '+' (with socket)
@@ -171,7 +198,6 @@ mod test {
             } {
                 let len = libc::strlen(buf.as_ptr());
                 assert!(len != 0);
-                libc::perror(buf.as_ptr());
                 let str = "hello\0";
                 for i in 0..len - 1 {
                     let x = &str[i..i + 1];
@@ -182,4 +208,42 @@ mod test {
             assert!(libc::fclose(stream) != -1);
         }
     }
+    #[test]
+    fn test_popen_date() {
+        Popen::arg("date").exec().unwrap();
+    }
+
+    #[test]
+    fn socketpair_redirect() {
+        unsafe {
+            let mut fd: [i32; 4096] = [0; 4096];
+            socketpair(PF_UNIX, SOCK_DGRAM, 0, fd.as_mut_ptr());
+            Close::close(&[fd[0]]).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_out_err() {
+        unsafe {
+            let popen = Popen::arg("rustc src/run.rs && ./run").exec().unwrap();
+            let mut buf = [0 as u8; 4096];
+            let mut p;
+            while {
+                p = fgets(buf.as_mut_ptr() as *mut i8, 4096, popen.stdout);
+                p != std::ptr::null_mut::<i8>() && *p != '\0' as i8
+            } {
+                assert!(strlen(p) != 0);
+            }
+            println!("");
+            while {
+                p = fgets(buf.as_mut_ptr() as *mut i8, 4096, popen.stderr);
+                p != std::ptr::null_mut::<i8>() && *p != '\0' as i8
+            } {
+                assert!(strlen(p) != 0);
+            }
+        }
+    }
+
+    #[test]
+    fn tty_shell() {}
 }
