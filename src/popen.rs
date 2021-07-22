@@ -4,7 +4,10 @@ use libc::{
 };
 use std::ffi::{CString, NulError};
 
-use crate::{create_pipe, dup::DupError, wait::Wait, Close, Dup, Fork, ForkPid, SocketPairError};
+use crate::{
+    create_pipe, create_pipe2, dup::DupError, wait::Wait, Close, Dup, Fork, ForkPid,
+    SocketPairError,
+};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Popen {
@@ -107,7 +110,8 @@ impl Popen {
     }
     pub fn exec(mut self: Box<Popen>) -> Result<Box<Popen>, PopenError> {
         // let [sv, fd] = socket_pipe()?;
-        let [stdout, stdin, stderr] = create_pipe!(3).ok_or(PopenError::PipeCreateFailed)?;
+        let [stdout, stdin] = create_pipe!(2).ok_or(PopenError::PipeCreateFailed)?;
+        let [stderr] = create_pipe2!(1, [O_NONBLOCK]).ok_or(PopenError::PipeCreateFailed)?;
         match Fork::fork() {
             ForkPid::Parent((_, children)) => {
                 self.pid = Some(children);

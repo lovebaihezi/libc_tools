@@ -92,6 +92,33 @@ macro_rules! create_pipe {
     }};
 }
 
+#[macro_export]
+macro_rules! create_pipe2 {
+    ($n: expr, $modes: expr) => {{
+        if $n != $modes.len() || $n == 0 {
+            None
+        } else {
+            let mut pipes: [[libc::c_int; 2]; $n] = [[0; 2]; $n];
+            let mut success = true;
+            for i in 0..$n as usize {
+                unsafe {
+                    match libc::pipe2(pipes[i].as_mut_ptr(), $modes[i]) {
+                        0 => {}
+                        _ => {
+                            success = false;
+                            break;
+                        }
+                    }
+                };
+            }
+            if success {
+                Some(pipes)
+            } else {
+                None
+            }
+        }
+    }};
+}
 
 #[cfg(test)]
 mod pipe {
