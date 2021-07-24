@@ -97,7 +97,8 @@ fn socket_pipe() -> Result<[[c_int; 2]; 2], PopenError> {
     }
 }
 
-// #[deprecated(note = "do not use!")]
+//BUG:opened fd do not closed!
+#[deprecated(note = "do not use!")]
 impl Popen {
     pub fn arg(arg: &str) -> Box<Popen> {
         Box::new(Popen {
@@ -114,6 +115,7 @@ impl Popen {
         let [stderr] = create_pipe2!(1, [O_NONBLOCK]).ok_or(PopenError::PipeCreateFailed)?;
         match Fork::fork() {
             ForkPid::Parent((_, children)) => {
+                println!("{}", self.as_ref() as *const Popen as *const i32 as i32);
                 self.pid = Some(children);
                 Close::close(&[stdin[0], stdout[1], stderr[1]])
                     .or_else(|x| Err(PopenError::CloseError(x)))?;
@@ -126,6 +128,7 @@ impl Popen {
             }
             // socket provide
             ForkPid::Children(_) => {
+                println!("{}", self.as_ref() as *const Popen as *const i32 as i32);
                 Dup::dup2s(
                     &[stdout[1], stderr[1], STDIN_FILENO],
                     &[STDOUT_FILENO, STDERR_FILENO, stdin[0]],
@@ -138,11 +141,14 @@ impl Popen {
                 let path = CString::new("/bin/sh").unwrap();
                 let sh = CString::new("sh").unwrap();
                 let exec = CString::new("-c").unwrap();
+                let zsh = CString::new("zsh").unwrap();
                 let arg = CString::new(self.arg.clone()).unwrap();
                 unsafe {
                     _exit(execl(
                         path.as_ptr(),
                         sh.as_ptr(),
+                        exec.as_ptr(),
+                        zsh.as_ptr(),
                         exec.as_ptr(),
                         arg.as_ptr(),
                         0,
@@ -238,13 +244,29 @@ mod popen {
             } {
                 assert!(strlen(p) != 0);
             }
-            println!("");
-            while {
-                p = fgets(buf.as_mut_ptr() as *mut i8, 4096, popen.stderr);
-                p != std::ptr::null_mut::<i8>() && *p != '\0' as i8
-            } {
-                assert!(strlen(p) != 0);
-            }
+        }
+    }
+
+    #[test]
+    fn test_write_out() {
+        let o = Popen::arg(
+            r#"
+while true;
+do
+    cat /proc/stat;
+    sleep 1;
+done;
+"#,
+        )
+        .exec()
+        .unwrap();
+        let mut buf: [i8; 4096] = [0 as i8; 4096];
+        let mut p;
+        while unsafe {
+            p = fgets(buf.as_mut_ptr(), 4096, o.stderr);
+            p != std::ptr::null_mut::<i8>()
+        } {
+            assert!(unsafe { strlen(p) } != 0);
         }
     }
 
