@@ -6,6 +6,7 @@
         "NONBLOCK",
         "Popen",
         "RDONLY",
+        "RDWR",
         "WNOHANG",
         "WRONLY",
         "errno",
@@ -19,7 +20,9 @@
         "fputs",
         "getpid",
         "getppid",
+        "openpt",
         "perror",
+        "posix",
         "socketpair",
         "strcmp",
         "strlen"

@@ -5,7 +5,7 @@ fn main() {
     // println!("you need to input some thing less then 4096");
     // let read_size = stdin().read(&mut buf).unwrap();
     // for i in 0..read_size {
-        // print!("{}", buf[i] as char);
+    // print!("{}", buf[i] as char);
     // }
     println!("");
     println!("i am an output!");

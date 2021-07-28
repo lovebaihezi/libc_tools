@@ -66,6 +66,15 @@ impl Display for Pipe {
 }
 #[macro_export]
 macro_rules! create_pipe {
+    (1) => {{
+        let mut pipe = [libc::c_int; 2];
+        match unsafe {
+            pipe(pipe.as_mut_ptr())
+        } {
+            -1 => None,
+            _  => Some(pipe)
+        }
+    }};
     ($n: expr) => {{
         if $n <= 0 {
             None
