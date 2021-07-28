@@ -1,13 +1,27 @@
 # libc_tools
 
-this crate is build for unix like server
+**this crate wrapper some sys_call in libc**
 
-and it aim to get the stdin, stdout, stderr
+thanks to libc
+this crate has some wrapper for libc:
+fork
+eg:
+``` rust
+match Fork::fork() {
+    ForkPid::Parent((parent, children)) => {}
+    ForkPid::Children((parent, children)) => {}
+    ForkPid::None => panic!("fork failed!")
+}
+```
+forkpt
+dup
+dup2(and dup2s for mutliply fd)
 
-from exec, (yes, a poor fork to std::process::Command)
+``` rust
+let x : () = Dup::dup2s(&[...olds], &[...news]).unwrap();
+```
 
-it provides three c FILE pointer(stream)
-
+popen
 **how to use**
 ```rust
 unsafe {
