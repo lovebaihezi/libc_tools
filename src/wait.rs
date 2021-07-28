@@ -30,7 +30,7 @@ impl Wait {
             }
         }
     }
-    pub fn children_with(
+    pub fn  children_with(
         pid: libc::pid_t,
         options: libc::c_int,
     ) -> Result<(libc::pid_t, libc::c_int), Wait> {
