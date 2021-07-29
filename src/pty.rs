@@ -1,4 +1,7 @@
-use std::ptr::{null, null_mut};
+use std::{
+    error::Error,
+    ptr::{null, null_mut},
+};
 
 use libc::{__errno_location, _exit, c_int, execlp, forkpty, termios, winsize};
 
@@ -22,11 +25,11 @@ use crate::{Close, Wait};
  */
 #[derive(Debug, Clone)]
 pub struct Pty {
-    pty_fd: Option<c_int>,
-    pid: Option<c_int>,
-    device_name: Option<String>,
-    terminal_attr: *mut termios,
-    windows_size: *mut winsize,
+    pub pty_fd: Option<c_int>,
+    pub pid: Option<c_int>,
+    pub device_name: Option<String>,
+    pub terminal_attr: *mut termios,
+    pub windows_size: *mut winsize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -36,7 +39,7 @@ pub enum PtyError {
 }
 
 impl Pty {
-    fn new(terminal_attr: *mut termios, windows_size: *mut winsize) -> Result<Pty, PtyError> {
+    pub fn new(terminal_attr: *mut termios, windows_size: *mut winsize) -> Result<Pty, PtyError> {
         let mut pty_fd = 0;
         let mut name = [0 as u8; 50];
         let pid = unsafe {
@@ -70,8 +73,8 @@ impl Pty {
 
 impl Drop for Pty {
     fn drop(&mut self) {
-        Close::close(&[self.pty_fd.unwrap()]).unwrap();
-        Wait::children_with(self.pid.unwrap(), 0).unwrap();
+        Close::close(&[self.pty_fd.unwrap()]).or_else(|x| Err(format!("{}", x))).unwrap();
+        Wait::children_with(self.pid.unwrap(), 0).or_else(|x| Err(format!("{}", x))).unwrap();
     }
 }
 
@@ -84,8 +87,16 @@ mod pty {
     use crate::Pty;
 
     #[test]
+    #[ignore] // cargo test this will not wait for drop, so the terminal will suspend
     fn test_pty() -> Result<(), Box<dyn Error>> {
         let pty = Pty::new(null_mut::<termios>(), null_mut::<winsize>()).unwrap();
+        println!(
+            "{}",
+            match &pty.device_name {
+                Some(v) => v.clone(),
+                None => panic!(""),
+            }
+        );
         unsafe {
             write(
                 pty.pty_fd.unwrap(),
@@ -111,7 +122,7 @@ mod pty {
             print!("{}", *i as char);
         }
         println!("");
-
+        // pty.drop()?;
         Ok(())
     }
 }
